@@ -45,6 +45,11 @@ struct Mon {
     attacks: Vec<String>,
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+struct TourData {
+    id: String,
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = Args::parse();
@@ -101,29 +106,15 @@ async fn get_tours(
     );
 
     let resp = client.get(&url).send().await?;
-    let json = resp.json::<serde_json::Value>().await?;
-    let entries = match json {
-        serde_json::Value::Array(entries) => entries,
-        _ => {
-            println!("Error parsing json");
-            return Err(anyhow::anyhow!("Error parsing json"));
-        }
-    };
+    let entries = resp.json::<Vec<TourData>>().await?;
     println!("total_entries={}", entries.len());
     // Make parallel requests for each entry.
     let mut handles = vec![];
     for entry in entries {
         let task_client = client.clone();
-        let id = match entry["id"].as_str() {
-            Some(id) => id,
-            None => {
-                println!("Error parsing tour id");
-                return Err(anyhow::anyhow!("Error parsing tour id"));
-            }
-        };
         let url = format!(
             "https://play.limitlesstcg.com/api/tournaments/{}/standings",
-            id
+            entry.id
         );
         handles.push(tokio::spawn(async move {
             let resp = task_client.get(&url).send().await;
