@@ -1,5 +1,6 @@
 package main
 
+// import "C".
 import (
 	"encoding/json"
 	"fmt"
@@ -13,10 +14,9 @@ import (
 func main() {
 	// Get API key from env
 	apiKey := getAPIKey()
-	client := &http.Client{}
 	start := time.Now()
 	// getGames(client, apiKey)
-	getTours(client, apiKey, "vgc23")
+	getTours(apiKey, "vgc23")
 	elapsed := time.Since(start)
 	fmt.Printf("Time elapsed: %s\n", elapsed)
 }
@@ -29,7 +29,9 @@ func getAPIKey() string {
 	return key
 }
 
-func getTours(client *http.Client, key string, format string) {
+//export getTours
+func getTours(key string, format string) {
+	client := &http.Client{}
 	// Get all tournaments
 	max_tours_count := ^uint64(0)
 	requrl := fmt.Sprintf("https://play.limitlesstcg.com/api/tournaments?format=%s&limit=%d", format, max_tours_count)
@@ -108,7 +110,7 @@ func getTours(client *http.Client, key string, format string) {
 		}(tour)
 	}
 	wg.Wait()
-	// fmt.Println(entries)
+	fmt.Println(entries)
 }
 
 func getGames(client *http.Client, key string) {

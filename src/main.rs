@@ -1,9 +1,20 @@
+use std::os::raw::c_char;
 use std::{collections::HashMap, env};
 
 use clap::{Parser, Subcommand};
 use futures_util::future::join_all;
 use http_cache_reqwest::{CACacheManager, Cache, CacheMode, HttpCache, HttpCacheOptions};
 use reqwest::header::{HeaderMap, HeaderValue};
+
+#[repr(C)]
+struct GoString {
+    a: *const c_char,
+    b: i64,
+}
+
+extern "C" {
+    fn getTours(key: GoString, format: GoString);
+}
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -71,6 +82,10 @@ async fn main() {
     let client = reqwest_middleware::ClientBuilder::new(
         reqwest::ClientBuilder::new()
             .default_headers(headers)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(10))
+            .trust_dns(true)
+            .use_rustls_tls()
             .build()
             .expect("Error building client"),
     )
@@ -90,6 +105,15 @@ async fn main() {
             get_tours(&client, &format)
                 .await
                 .expect("Error getting tours");
+            // let key = GoString {
+            //     a: key.as_ptr() as *const c_char,
+            //     b: key.len() as i64,
+            // };
+            // let format = GoString {
+            //     a: format.as_ptr() as *const c_char,
+            //     b: format.len() as i64,
+            // };
+            // unsafe { getTours(key, format) };
             println!("Time taken={:?}", start.elapsed());
         }
     }
@@ -109,7 +133,7 @@ async fn get_tours(
     let entries = resp.json::<Vec<TourData>>().await?;
     println!("total_entries={}", entries.len());
     // Make parallel requests for each entry.
-    let mut handles = vec![];
+    let mut handles = Vec::with_capacity(entries.len());
     for entry in entries {
         let task_client = client.clone();
         let url = format!(
@@ -137,13 +161,13 @@ async fn get_tours(
     }
     let results = join_all(handles).await;
     // let mons = HashMap::new();
-    for result in results.into_iter().flatten().flatten() {
-        // println!(
-        //     "{}",
-        //     serde_json::to_string_pretty(&resp).expect("Error serializing json")
-        // )
-        // println!("{:?}", resp)
-    }
+    // println!("{:?}", results);
+    // for result in results.into_iter().flatten().flatten() {
+    // println!(
+    //     "{}",
+    //     serde_json::to_string_pretty(&resp).expect("Error serializing json")
+    // )
+    // }
     Ok(())
 }
 
