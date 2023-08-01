@@ -1,4 +1,4 @@
-use std::env;
+use std::{collections::HashMap, env};
 
 use clap::{Parser, Subcommand};
 use futures_util::future::join_all;
@@ -17,16 +17,52 @@ enum Mode {
     Formats,
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+struct Tournaments {
+    pairings: Vec<Standing>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+struct Record {
+    wins: u32,
+    losses: u32,
+    ties: u32,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+struct Standing {
+    decklist: Vec<Mon>,
+    record: Record,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+struct Mon {
+    id: String,
+    name: String,
+    item: String,
+    tera: Option<String>,
+    ability: String,
+    attacks: Vec<String>,
+}
+
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = Args::parse();
     let key = get_limitless_key();
+
     let mut headers = HeaderMap::new();
     let header_value = match HeaderValue::from_str(&key) {
         Ok(header_value) => header_value,
         Err(e) => panic!("Error creating header value - {}", e),
     };
     headers.insert("X-Access-Key", header_value);
+
+    let header_value = match HeaderValue::from_str("application/json") {
+        Ok(header_value) => header_value,
+        Err(e) => panic!("Error creating header value - {}", e),
+    };
+    headers.insert("Content-type", header_value);
+
     let client = reqwest_middleware::ClientBuilder::new(
         reqwest::ClientBuilder::new()
             .default_headers(headers)
@@ -40,19 +76,18 @@ async fn main() {
     }))
     .build();
 
-    let start = std::time::Instant::now();
     match args.mode {
         Mode::Formats => {
             get_games(&client).await;
         }
         Mode::Tours { format } => {
+            let start = std::time::Instant::now();
             get_tours(&client, &format)
                 .await
                 .expect("Error getting tours");
+            println!("Time taken={:?}", start.elapsed());
         }
     }
-    let end = std::time::Instant::now();
-    println!("Time taken={:?}", end.duration_since(start));
 }
 
 async fn get_tours(
@@ -67,46 +102,56 @@ async fn get_tours(
 
     let resp = client.get(&url).send().await?;
     let json = resp.json::<serde_json::Value>().await?;
-    let entries = match json.as_array() {
-        Some(entries) => entries,
-        None => return Err(anyhow::anyhow!("Error parsing json as array")),
+    let entries = match json {
+        serde_json::Value::Array(entries) => entries,
+        _ => {
+            println!("Error parsing json");
+            return Err(anyhow::anyhow!("Error parsing json"));
+        }
     };
     println!("total_entries={}", entries.len());
     // Make parallel requests for each entry.
     let mut handles = vec![];
     for entry in entries {
-        let entry = entry.clone();
         let task_client = client.clone();
+        let id = match entry["id"].as_str() {
+            Some(id) => id,
+            None => {
+                println!("Error parsing tour id");
+                return Err(anyhow::anyhow!("Error parsing tour id"));
+            }
+        };
+        let url = format!(
+            "https://play.limitlesstcg.com/api/tournaments/{}/standings",
+            id
+        );
         handles.push(tokio::spawn(async move {
-            let id = match entry["id"].as_str() {
-                Some(id) => id,
-                None => {
-                    println!("Error parsing tour id");
-                    return;
-                }
-            };
-
-            let url = format!(
-                "https://play.limitlesstcg.com/api/tournaments/{}/standings",
-                id
-            );
             let resp = task_client.get(&url).send().await;
             let resp = match resp {
                 Ok(resp) => resp,
                 Err(e) => {
                     println!("Error getting games - {}", e);
-                    return;
+                    return Err(anyhow::anyhow!("Error getting games"));
                 }
             };
-            let _body = resp.text().await.unwrap();
+            // let text = resp.text().await.expect("Error getting text");
+            let body = resp.json::<Vec<Standing>>().await;
+            // let body = resp.json::<serde_json::Value>().await;
+            // let body = serde_json::from_str::<Vec<Standing>>(&text);
+            match body {
+                Ok(body) => Ok(body),
+                Err(_e) => Err(anyhow::anyhow!("Error parsing json")),
+            }
         }));
     }
     let results = join_all(handles).await;
-    for result in results {
-        match result {
-            Ok(_) => {}
-            Err(e) => println!("Error getting tour - {}", e),
-        }
+    // let mons = HashMap::new();
+    for result in results.into_iter().flatten().flatten() {
+        // println!(
+        //     "{}",
+        //     serde_json::to_string_pretty(&resp).expect("Error serializing json")
+        // )
+        // println!("{:?}", resp)
     }
     Ok(())
 }
